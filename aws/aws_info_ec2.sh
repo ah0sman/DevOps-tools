@@ -41,10 +41,11 @@ max_args 1 "$@"
 check_bin aws
 
 if [ $# -gt 0 ]; then
-    project_id="$1"
+    aws_profile="$1"
     shift || :
-    export CLOUDSDK_CORE_PROJECT="$project_id"
+    export AWS_PROFILE="$aws_profile"
 fi
+
 
 # AWS Virtual Machines
 cat >&2 <<EOF
@@ -57,12 +58,7 @@ EOF
 declare -A ami_map
 
 timestamp "Getting all unique AMI IDs in use"
-ami_ids="$(
-    aws ec2 describe-instances \
-        --query 'Reservations[*].Instances[*].ImageId' \
-        --output text |
-    sort -u
-)"
+ami_ids="$("$srcdir/aws_ec2_ami_ids.sh")"
 
 while read -r ami_id; do
     [[ -z "$ami_id" ]] && continue
@@ -86,20 +82,23 @@ sed_script=''
 for ami_id in "${!ami_map[@]}"; do
     ami_name="${ami_map[$ami_id]}"
     sed_script+="
-    s/[[:space:]]${ami_id}[[:space:]]/$ami_name/g;"
+    s|[[:space:]]${ami_id}[[:space:]]|$ami_name|g;"
 done
 
 timestamp "Getting list of EC2 instances with translated AMI IDs to Names"
+timestamp "Putting AMI last as replacing the AMI IDs with Names will mess up the character width alignment of the last column"
 echo >&2
 # shellcheck disable=SC2016
 aws ec2 describe-instances \
     --query 'Reservations[*].Instances[*].{
                 "  Name": Tags[?Key==`Name`].Value | [0],
                 "  ID": InstanceId,
+                "  PrivateIP": PrivateIpAddress,
                 "  State": State.Name,
                 " InstanceType": InstanceType,
                 "AMI": ImageId,
-                " Architecture": "Architecture",
+                " Architecture": Architecture,
+                " Platform": PlatformDetails,
                 " PublicDNS": publicDnsName,
                 " PrivateDNS": PrivateDnsName
             }' \

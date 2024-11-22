@@ -26,6 +26,10 @@ Lists AWS EC2 Instances resources deployed in the current AWS account
 
 Written to be combined with aws_foreach_project.sh
 
+Outputs to both stdout and a file called aws_info_ec2-<AWS_ACCOUNT_ID>-YYYY-MM-DD_HH.MM.SS.csv
+
+So that you can diff subsequent runs to see the difference between EC2 VMs that come and go due to AutoScaling Groups
+
 
 $usage_aws_cli_required
 "
@@ -41,10 +45,14 @@ max_args 1 "$@"
 check_bin aws
 
 if [ $# -gt 0 ]; then
-    project_id="$1"
+    aws_profile="$1"
     shift || :
-    export CLOUDSDK_CORE_PROJECT="$project_id"
+    export AWS_PROFILE="$aws_profile"
 fi
+
+aws_account_id="$(aws_account_id)"
+
+csv="aws_info_ec2-$aws_account_id-$(date '+%F_%H.%M.%S').csv"
 
 # AWS Virtual Machines
 cat >&2 <<EOF
@@ -52,17 +60,14 @@ cat >&2 <<EOF
 #                   E C 2   V i r t u a l   M a c h i n e s
 # ============================================================================ #
 
+Saving to: $PWD/$csv
+
 EOF
 
 declare -A ami_map
 
 timestamp "Getting all unique AMI IDs in use"
-ami_ids="$(
-    aws ec2 describe-instances \
-        --query 'Reservations[*].Instances[*].ImageId' \
-        --output text |
-    sort -u
-)"
+ami_ids="$("$srcdir/aws_ec2_ami_ids.sh")"
 
 while read -r ami_id; do
     [[ -z "$ami_id" ]] && continue
@@ -86,7 +91,7 @@ sed_script=''
 for ami_id in "${!ami_map[@]}"; do
     ami_name="${ami_map[$ami_id]}"
     sed_script+="
-    s/\"$ami_id\"/\"$ami_name\"/g;"
+    s|\"$ami_id\"|\"$ami_name\"|g;"
 done
 
 timestamp "Getting list of EC2 instances"
@@ -96,10 +101,12 @@ json="$(
         --query 'Reservations[*].Instances[*].{
                     "Name": Tags[?Key==`Name`].Value | [0],
                     "ID": InstanceId,
+                    "IP": PrivateIpAddress,
                     "State": State.Name,
                     "InstanceType": InstanceType,
                     "AMI": ImageId,
-                    "Architecture": "Architecture",
+                    "Architecture": Architecture,
+                    "Platform": PlatformDetails,
                     "PublicDNS": publicDnsName,
                     "PrivateDNS": PrivateDnsName
                 }' \
@@ -109,9 +116,12 @@ json="$(
 
 timestamp "Generating CSV output with AMI images IDs resolved to names"
 echo >&2
+echo '"Instance_ID","Instance_Name","Private_IP_Address","State","Instance_Type","Platform","AMI","Architecture","Private_DNS","Public_DNS"'
 jq -r '
     .[][] |
-    [ .ID, .Name, .State, .InstanceType, .AMI, .Architecture, .PrivateDNS, .PublicDNS ] |
+    [ .ID, .Name, .IP, .State, .InstanceType, .Platform, .AMI, .Architecture, .PrivateDNS, .PublicDNS ] |
+    map(if . == null or . == "" then "" else . end) |
     @csv
 ' <<< "$json" |
-sed "$sed_script"
+sed "$sed_script" |
+tee "$csv"

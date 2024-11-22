@@ -27,6 +27,10 @@ Gathers AWS Info across all projects in CSV format
 
 Combines aws_foreach_profile.sh and aws_info_csv.sh
 
+Outputs to both stdout and a file called aws_info_all_profiles-YYYY-MM-DD_HH.MM.SS.csv
+
+So that you can diff subsequent runs to see the difference between EC2 VMs that come and go due to AutoScaling Groups
+
 
 $usage_aws_cli_required
 "
@@ -37,4 +41,38 @@ usage_args=""
 
 help_usage "$@"
 
-aws_foreach_profile.sh "'$srcdir/aws_info_csv.sh' '{profile}'"
+num_args 0 "$@"
+
+        # don't do this, solved blank columns natively now so it's easier to spot end of line issues if they end in aa comma instead of ,""
+        # see aws_info_ec2_csv.sh where empty fields are now explicitly set to ""
+        #s|,$|,\"\"|;
+
+csv="aws_info_all_profiles-$(date '+%F_%H.%M.%S').csv"
+
+# AWS Virtual Machines
+cat >&2 <<EOF
+# ============================================================================ #
+#                      A W S   I n f o   I n v e n t o r y
+# ============================================================================ #
+
+Saving to: $PWD/$csv
+
+EOF
+
+aws_foreach_profile.sh "
+    '$srcdir/aws_info_csv.sh' '{profile}' |
+    sed '
+        s|^|\"{profile}\",|;
+        1s|^\"{profile}\"|\"AWS_Profile\"|;
+    '
+" |
+tee "$csv"
+
+tmp="$(mktemp)"
+
+sort -fu "$csv" > "$tmp"
+
+mv "$tmp" "$csv"
+
+echo >&2
+timestamp "Script Completed Successfully: ${0##*/}"
